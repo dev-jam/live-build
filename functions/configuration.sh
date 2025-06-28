@@ -458,6 +458,14 @@ Prepare_config ()
 	LB_HDD_LABEL="${LB_HDD_LABEL:-DEBIAN_LIVE}"
 	LB_HDD_SIZE="${LB_HDD_SIZE:-auto}"
 
+	# Setting partition options
+	LB_EFI_PARTITION="${LB_EFI_PARTITION:-true}"
+	LB_EFI_PARTITION_SIZE="${LB_EFI_PARTITION_SIZE:-auto}"
+	LB_BIOS_GRUB_PARTITION_SIZE="${LB_BIOS_GRUB_PARTITION_SIZE:-auto}"
+	LB_HDD_LIVE_PARTITION_SIZE="${LB_HDD_LIVE_PARTITION_SIZE:-auto}"
+	LB_HDD_PARTITION_TABLE="${LB_HDD_PARTITION_TABLE:-msdos}"
+	LB_HDD_PARTITION_START="${LB_HDD_PARTITION_START:-auto}"
+
 	LB_MEMTEST="${LB_MEMTEST:-none}"
 	if [ "${LB_MEMTEST}" = "false" ]; then
 		LB_MEMTEST="none"
@@ -843,7 +851,7 @@ Validate_config_dependencies ()
 	fi
 
 	if In_list "grub-pc" ${LB_BOOTLOADERS} || In_list "grub-efi" ${LB_BOOTLOADERS} || In_list "grub-legacy" ${LB_BOOTLOADERS}; then
-		if In_list "${LB_IMAGE_TYPE}" hdd netboot; then
+		if In_list "${LB_IMAGE_TYPE}" netboot; then
 			Echo_error "You have selected an invalid combination of bootloaders and live image type; the grub-* bootloaders are not compatible with hdd and netboot types."
 			exit 1
 		fi

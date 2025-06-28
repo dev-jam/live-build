@@ -32,6 +32,8 @@
 .br
 	[\fB\-\-backports\fR true|false]
 .br
+	[\fB\-\-bios\-grub\-partition\-size \fIMiB\fR]
+.br
 	[\fB\-\-binary\-filesystem\fR fat16|fat32|ext2|ext3|ext4|ntfs]
 .br
 	[\fB\-b\fR|\fB\-\-binary\-image\fR iso|iso\-hybrid|netboot|tar|hdd]
@@ -112,6 +114,10 @@
 .br
 	[\fB\-\-dump\fR]
 .br
+	[\fB\-\-efi\-partition\fR true|false]
+.br
+	[\fB\-\-efi\-partition\-size \fIMiB\fR]
+.br
 	[\fB\-\-firmware\-binary\fR true|false]
 .br
 	[\fB\-\-firmware\-chroot\fR true|false]
@@ -122,9 +128,11 @@
 .br
 	[\fB\-\-hdd\-label\fR \fILABEL\fR]
 .br
-	[\fB\-\-hdd\-partition\-start\fR \fISTART\fR]
+	[\fB\-\-hdd\-live\-partition\-size \fIMiB\fR]
 .br
-	[\fB\-\-hdd\-size\fR \fISIZE\fR]
+	[\fB\-\-hdd\-partition\-table\fR msdos|gpt]
+.br
+	[\fB\-\-hdd\-partition\-start \fIMiB\fR]
 .br
 	[\fB\-\-ignore\-system\-defaults\fR]
 .br
@@ -268,6 +276,8 @@ defines if debian backports package archives should be included in the image or 
 defines the filesystem to be used in the image type. This only has an effect if the selected binary image type lets you choose a filesystem. For example, for the ISO image type the resulting CD/DVD always has the filesystem ISO9660. When building HDD images for USB sticks, multiple filesystem formats are supported, thus this becomes applicable to allow selection. Note that it defaults to 'fat32' on all architectures. Also note that if you choose 'fat16' and your resulting binary image gets bigger than 2GB, the binary filesystem automatically gets switched to 'fat32'.
 .IP "\fB\-b\fR|\fB\-\-binary\-image\fR iso|iso\-hybrid|netboot|tar|hdd" 4
 defines the image type to build. By default, for images using syslinux, this is set to 'iso\-hybrid' to build CD/DVD images that may also be used like HDD images, for non\-syslinux images, it defaults to 'iso'.
+.IP "\fB\-\-bios\-grub\-partition\-size \fIMiB\fR" 4
+defines the size of the BIOS_GRUB partition. Default is auto. Also note that some combinations of binary images types and bootloaders may be possible but live\-build does not support them yet. \fBlb config\fR will fail to create such a not yet supported configuration and give a explanation about it. For hdd images on amd64 and i386, the default is syslinux.
 .IP "\fB\-\-bootappend\-install\fR \fIPARAMETER\fR|""\fIPARAMETERS\fR""" 4
 sets boot parameters specific to debian\-installer, if included.
 .IP "\fB\-\-bootappend\-live\fR \fIPARAMETER\fR|""\fIPARAMETERS\fR""" 4
@@ -344,6 +354,10 @@ Enables forward error correction for dm-verity. \fINB_ROOTS\fR is the number of 
 Sign root hash of dm-verity device. Script takes two arguments: the root hash and a file to output the signature to.
 .IP "\fB\-\-dump\fR" 4
 prepares a report of the currently present live system configuration and the version of live\-build used. This is useful to provide if you submit bug reports, helping to provide basic useful information required for us to locate and replicate an error.
+.IP "\fB\-\-efi\-partition\fR true|false" 4
+defines if a efi partition is created. Tthe default is true.
+.IP "\fB\-\-efi\-partition\-size \fIMiB\fR" 4
+defines the size of the EFI partition. Default is auto.
 .IP "\fB\-\-firmware\-binary\fR true|false" 4
 includes firmware packages in debian-installer. Defaults to true.
 .IP "\fB\-\-firmware\-chroot\fR true|false" 4
@@ -353,12 +367,13 @@ forces re\-execution of already run stages. Use only if you know what you are do
 .IP "\fB\-\-gzip\-options\fR \fIOPTION\fR|""\fIOPTIONS\fR""" 4
 defines the default options that will be appended to (almost) every gzip call during the building of the image. By default, this is set to '\-\-best' to use highest (but slowest) compression. Dynamically, if the host system supports it, also '\-\-rsyncable' is added.
 .IP "\fB\-\-hdd\-label\fR \fILABEL\fR" 4
-defines the label for the HDD target. Defaults to 'DEBIAN_LIVE'.
-.IP "\fB\-\-hdd\-partition\-start\fR \fISTART\fR" 4
-sets the start of the partition for the HDD target for BIOSes that expect a specific boot partition start (e.g. "63s"). If empty, use optimal layout. Defaults to empty.
-.IP "\fB\-\-hdd\-size\fR \fISIZE\fR" 4
-defines the size for the HDD target. The unit is MiB. Defaults to 'auto', which generates the smallest possible image.
-.IP "\fB\-\-ignore\-system\-defaults\fR" 4
+defines the label of the LIVE partition. Default is auto
+.IP "\fB\-\-hdd\-live\-partition\-size \fIMiB\fR" 4
+defines the size of the LIVE partition. Default is auto
+.IP "\fB\-\-hdd\-partition\-table\fR msdos|gpt" 4
+defines the partition table of the image. Default is msdos
+.IP "\fB\-\-hdd\-partition\-start \fIMiB\fR" 4
+defines the start of partitioning. Default is auto (1MiB).IP "\fB\-\-ignore\-system\-defaults\fR" 4
 \fBlb config\fR by default reads system defaults from \fI/etc/live/build.conf\fR and \fI/etc/live/build/*\fR when generating a new live system config directory. This is useful if you want to set global settings, such as mirror locations, and don't want to specify them all of the time. This option allows you to ignore such global settings.
 .IP "\fB\-\-image\-name\fR \fINAME\fR" 4
 sets the base name of the image. Defaults to live-image.

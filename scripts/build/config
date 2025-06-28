@@ -30,6 +30,7 @@ USAGE="${PROGRAM} [--apt apt|apt-get|aptitude]\n\
 \t    [--backports true|false]\n\
 \t    [--binary-filesystem fat16|fat32|ext2|ext3|ext4|ntfs]\n\
 \t    [-b|--binary-image iso|iso-hybrid|netboot|tar|hdd]\n\
+\t    [--bios-grub-partition-size MiB]\n\
 \t    [--bootappend-install PARAMETER|\"PARAMETERS\"]\n\
 \t    [--bootappend-live PARAMETER|\"PARAMETERS\"]\n\
 \t    [--bootappend-live-failsafe PARAMETER|\"PARAMETERS\"]\n\
@@ -68,13 +69,16 @@ USAGE="${PROGRAM} [--apt apt|apt-get|aptitude]\n\
 \t    [--dm-verity-fec NB_ROOTS]\n\
 \t    [--dm-verity-sign SIGN_SCRIPT]\n\
 \t    [--dump]\n\
+\t    [--efi-partition true|false]\n\
+\t    [--efi-partition-size MiB]\n\
 \t    [--firmware-binary true|false]\n\
 \t    [--firmware-chroot true|false]\n\
 \t    [--force]\n\
 \t    [--gzip-options OPTION|\"OPTIONS\"]\n\
 \t    [--hdd-label LABEL]\n\
-\t    [--hdd-partition-start START]\n\
-\t    [--hdd-size SIZE]\n\
+\t    [--hdd-live-partition-size MiB]\n\
+\t    [--hdd-partition-table msdos|gpt]\n\
+\t    [--hdd-partition-start MiB]\n\
 \t    [--ignore-system-defaults]\n\
 \t    [--image-name NAME]\n\
 \t    [--initramfs none|live-boot]\n\
@@ -140,7 +144,8 @@ Local_arguments ()
 		apt-source-archives:,architecture:,architectures:,archive-areas:,
 		backports:,binary-filesystem:,binary-image:,binary-images:,
 		bootappend-install:,bootappend-live:,bootappend-live-failsafe:,
-		bootloader:,bootloaders:,bootstrap-qemu-arch:,bootstrap-qemu-exclude:,
+		bootloader:,bootloaders:,efi-partition:,efi-partition-size:,
+		bios-grub-partition-size:,bootstrap-qemu-arch:,bootstrap-qemu-exclude:,
 		bootstrap-qemu-static:,breakpoints,build-with-chroot:,
 		cache:,cache-indices:,cache-packages:,cache-stages:,checksums:,
 		chroot-filesystem:,chroot-squashfs-compression-level:,
@@ -152,7 +157,8 @@ Local_arguments ()
 		distribution:,distribution-binary:,distribution-chroot:,dump,
 		fdisk:,firmware-binary:,firmware-chroot:,force,
 		grub-splash:,gzip-options:,
-		hdd-label:,hdd-partition-start:,hdd-size:,help,
+		hdd-label:,hdd-live-partition-size:,
+		hdd-partition-table:,hdd-partition-start:,help,
 		ignore-system-defaults,image-name:,initramfs:,initramfs-compression:,
 		initsystem:,interactive:,iso-application:,isohybrid-options:,
 		iso-preparer:,iso-publisher:,iso-volume:,
@@ -372,6 +378,21 @@ Local_arguments ()
 				shift 2
 				;;
 
+			--efi-partition)
+				LB_EFI_PARTITION="${2}"
+				shift 2
+				;;
+
+			--efi-partition-size)
+				LB_EFI_PARTITION_SIZE="${2}"
+				shift 2
+				;;
+
+			--bios-grub-partition-size)
+				LB_BIOS_GRUB_PARTITION_SIZE="${2}"
+				shift 2
+				;;
+
 			--bootstrap-qemu-arch)
 				LB_BOOTSTRAP_QEMU_ARCHITECTURE="${2}"
 				shift 2
@@ -537,13 +558,22 @@ Local_arguments ()
 				shift 2
 				;;
 
+			--hdd-live-partition-size)
+				LB_HDD_LIVE_PARTITION_SIZE="${2}"
+				shift 2
+				;;
+
+			--hdd-partition-table)
+				LB_HDD_PARTITION_TABLE="${2}"
+				shift 2
+				;;
+
 			--hdd-partition-start)
 				LB_HDD_PARTITION_START="${2}"
 				shift 2
 				;;
-
-			--hdd-size)
-				LB_HDD_SIZE="${2}"
+			--hdd-label)
+				LB_HDD_LABEL="${2}"
 				shift 2
 				;;
 
@@ -1219,8 +1249,14 @@ LB_BOOTLOADER_BIOS="${LB_BOOTLOADER_BIOS}"
 # Set EFI bootloader
 LB_BOOTLOADER_EFI="${LB_BOOTLOADER_EFI}"
 
-# Set bootloaders
-LB_BOOTLOADERS="${LB_BOOTLOADERS}"
+# Set EFI partition option
+LB_EFI_PARTITION="${LB_EFI_PARTITION}"
+
+# Set EFI partition size
+LB_EFI_PARTITION_SIZE="${LB_EFI_PARTITION_SIZE}"
+
+# Set BIOS GRUB partition size
+LB_BIOS_GRUB_PARTITION_SIZE="${LB_BIOS_GRUB_PARTITION_SIZE}"
 
 # Set checksums
 LB_CHECKSUMS="${LB_CHECKSUMS}"
@@ -1259,8 +1295,11 @@ LB_DEBIAN_INSTALLER_GUI="${LB_DEBIAN_INSTALLER_GUI}"
 # Set hdd label
 LB_HDD_LABEL="${LB_HDD_LABEL}"
 
-# Set hdd filesystem size
-LB_HDD_SIZE="${LB_HDD_SIZE}"
+# Set hdd partition size
+LB_HDD_LIVE_PARTITION_SIZE="${LB_HDD_LIVE_PARTITION_SIZE}"
+
+# Set hdd partition table
+LB_HDD_PARTITION_TABLE="${LB_HDD_PARTITION_TABLE}"
 
 # Set start of partition for the hdd target for BIOSes that expect a specific boot partition start (e.g. "63s"). If empty, use optimal layout.
 LB_HDD_PARTITION_START="${LB_HDD_PARTITION_START}"

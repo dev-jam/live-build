@@ -36,6 +36,47 @@ Check_stagefile
 # Acquire lock file
 Acquire_lockfile
 
+BIOS_BOOT="false"
+EFI_BOOT="false"
+
+# check for grub EFI/BIOS
+if [ "${LB_BOOTLOADER_BIOS}" = "grub-pc" ] || [ "${LB_BOOTLOADER_BIOS}" = "grub-legacy" ] || [ "${LB_BOOTLOADER_BIOS}" = "syslinux" ]
+then
+	BIOS_BOOT="true"
+	Echo_message "Using ${LB_BOOTLOADER_BIOS} as BIOS bootloader"
+else
+	BIOS_BOOT="false"
+fi
+if [ "${LB_BOOTLOADER_EFI}" = "grub-efi" ]
+then
+	EFI_BOOT="true"
+	Echo_message "Using ${LB_BOOTLOADER_EFI} as EFI bootloader"
+else
+	EFI_BOOT="false"
+fi
+
+# setting default partition sizes in MiB
+if [ "${LB_EFI_PARTITION_SIZE}" = "auto" ]
+then
+	EFI_PARTITION_SIZE=300
+else
+	EFI_PARTITION_SIZE=$LB_EFI_PARTITION_SIZE
+fi
+
+if [ "${LB_BIOS_GRUB_PARTITION_SIZE}" = "auto" ]
+then
+	BIOS_GRUB_PARTITION_SIZE=1
+else
+	BIOS_GRUB_PARTITION_SIZE=$LB_BIOS_GRUB_PARTITION_SIZE
+fi
+
+if [ "${LB_HDD_PARTITION_START}" = "auto" ]
+then
+	HDD_PARTITION_START=1
+else
+	HDD_PARTITION_START=$LB_HDD_PARTITION_START
+fi
+
 # Checking depends
 case "${LB_BINARY_FILESYSTEM}" in
 	fat*)
@@ -47,32 +88,54 @@ case "${LB_BINARY_FILESYSTEM}" in
 		;;
 esac
 
+# check whether to use seperate partition for UEFI
+if [ "$EFI_BOOT" = "true" ] &&  [ "$LB_EFI_PARTITION" = "true" ]
+then
+	Check_package chroot /sbin/mkdosfs dosfstools
+fi
+
+# check for partition tools
 Check_package chroot /usr/share/doc/mtools mtools
 Check_package chroot /sbin/parted parted
 Check_package host /sbin/fdisk fdisk
 Check_package host /sbin/losetup mount
 
+# check for BIOS bootloader tools
 case "${LB_BOOTLOADER_BIOS}" in
-	grub-legacy)
-		Check_package chroot /usr/sbin/grub grub
-		;;
+		syslinux)
+			case ${LB_BINARY_FILESYSTEM} in
+				fat*|ntfs)
+					_BOOTLOADER=syslinux
+					LB_BOOTLOADER_BIOS=syslinux
+					;;
+				ext[234]|btrfs)
+					_BOOTLOADER=extlinux
+					LB_BOOTLOADER_BIOS=extlinux
+					Check_package host /usr/bin/lsattr e2fsprogs
+					;;
+				*)
+					Echo_error "syslinux/extlinux doesn't support ${LB_BINARY_FILESYSTEM}"
+					exit 1
+					;;
+			esac
+			Check_package chroot /usr/bin/${_BOOTLOADER} ${_BOOTLOADER}
+			;;
+		grub-pc)
+			Check_package chroot /usr/lib/grub/i386-pc/kernel.img grub-pc-bin
+			Check_package chroot /usr/sbin/grub-install grub2-common
+			;;
+		grub-legacy)
+			Check_package chroot /usr/sbin/grub grub
+			;;
+esac
 
-	syslinux)
-		case ${LB_BINARY_FILESYSTEM} in
-			fat*|ntfs)
-				_BOOTLOADER=syslinux
-				;;
-			ext[234]|btrfs)
-				_BOOTLOADER=extlinux
-				Check_package host /usr/bin/lsattr e2fsprogs
-				;;
-			*)
-				Echo_error "syslinux/extlinux doesn't support ${LB_BINARY_FILESYSTEM}"
-				exit 1
-				;;
-		esac
-		Check_package chroot /usr/bin/${_BOOTLOADER} ${_BOOTLOADER}
-		;;
+# check for EFI bootloader tools
+case "${LB_BOOTLOADER_EFI}" in
+		grub-efi)
+			Check_package chroot /usr/lib/grub/i386-efi/kernel.img grub-efi-ia32-bin
+			Check_package chroot /usr/lib/grub/x86_64-efi/kernel.img grub-efi-amd64-bin
+			Check_package chroot /usr/sbin/grub-install grub2-common
+			;;
 esac
 
 # Restoring cache
@@ -127,32 +190,86 @@ then
 	export LB_BINARY_FILESYSTEM
 fi
 
-# Everything which comes here needs to be cleaned up,
-if [ "$LB_HDD_SIZE" = "auto" ];
+# Determine hdd size
+
+if [ "${HDD_PARTITION_START}" = "auto" ]
+then
+	HDD_PARTITION_START=1
+elif [ "${HDD_PARTITION_START}" -eq 0 ]
+then
+	HDD_PARTITION_START=1
+fi
+
+HDD_SIZE_CORRECTION=1
+HDD_SIZE=$HDD_PARTITION_START
+HDD_SIZE=$((HDD_SIZE + HDD_SIZE_CORRECTION))
+
+## Live partition
+if [ "$LB_HDD_LIVE_PARTITION_SIZE" = "auto" ]
 then
 	DU_DIM="$(du ${DU_OPTIONS} -ms binary | cut -f1)"
 	REAL_DIM="$(Calculate_partition_size ${DU_DIM} ${LB_BINARY_FILESYSTEM})"
+	LIVE_PARTITION_SIZE=$((REAL_DIM))
+	HDD_SIZE=$((HDD_SIZE + LIVE_PARTITION_SIZE))
 else
-	REAL_DIM=$LB_HDD_SIZE
+	LIVE_PARTITION_SIZE=$LB_HDD_LIVE_PARTITION_SIZE
+	HDD_SIZE=$((HDD_SIZE + LIVE_PARTITION_SIZE))
 fi
 
-dd if=/dev/zero of=chroot/binary.img bs=1024k count=0 seek=${REAL_DIM}
+Echo_message "Live partition is going to be ${LIVE_PARTITION_SIZE} MiB"
+
+## EFI partition
+if [ "$EFI_BOOT" = "true" ] &&  [ "$LB_EFI_PARTITION" = "true" ]
+then
+	HDD_SIZE=$((HDD_SIZE + EFI_PARTITION_SIZE))
+	Echo_message "EFI partition is going to be ${EFI_PARTITION_SIZE} MiB"
+fi
+
+
+
+## grub bios partition
+if [ "$BIOS_BOOT" = "true" ] && [ "$LB_HDD_PARTITION_TABLE" = "gpt" ]
+then
+	case "$LB_BOOTLOADER_BIOS" in
+		grub-*)
+			HDD_SIZE=$((HDD_SIZE + BIOS_GRUB_PARTITION_SIZE))
+			Echo_message "bios_grub partition is going to be ${BIOS_GRUB_PARTITION_SIZE} MiB"
+			;;
+	esac
+
+fi
+
+
+## gpt partition table
+if [ "${LB_HDD_PARTITION_TABLE}" = "gpt" ]
+then
+	HDD_SIZE=$((HDD_SIZE + 1))
+fi
+
+
+
+# create empty image file
+dd if=/dev/zero of=chroot/binary.img bs=1024k count=0 seek=${HDD_SIZE}
+
+# create loop device from image file
 FREELO="$(losetup -f)"
 MAKEDEV=false
 if [ ! -b chroot/${FREELO} ]
 then
 	MAKEDEV=true
-
+	Echo_message "Moving chroot/dev temporarily!"
 	mv chroot/dev chroot/dev.tmp
 	# Don't copy mount points (e.g. /dev/shm)
+	Echo_message "Creating fresh chroot/dev"
 	find /dev -xdev | cpio -dmpu chroot
 fi
 
-echo "!!! The following error/warning messages can be ignored !!!"
+Echo_message "Setting up: ${FREELO}"
 Losetup $FREELO chroot/binary.img 0
 
-PARTITION_TABLE_TYPE="msdos"
+Echo_message "Live partition is going to be formatted with: ${LB_BINARY_FILESYSTEM}"
 
+# determine partition fs
 case "${LB_BINARY_FILESYSTEM}" in
 	ext2|ext3|ext4)
 		PARTITION_TYPE="ext2"
@@ -166,57 +283,313 @@ case "${LB_BINARY_FILESYSTEM}" in
 		PARTITION_TYPE="NTFS"
 		;;
 
+	exfat)
+		PARTITION_TYPE="fat32"
+		;;
+
 	*)
 		Echo_error "Unsupported binary filesystem %s" "${LB_BINARY_FILESYSTEM}"
 		exit 1
 		;;
 esac
 
+PARTITION_NUMBER=1
+
+Echo_message "Using partition start at ${HDD_PARTITION_START} MiB"
+Echo_message "Using partition table: ${LB_HDD_PARTITION_TABLE}"
+
+# partition the image file
 case "${LB_BUILD_WITH_CHROOT}" in
 	true)
-		Chroot chroot "parted -s ${FREELO} mklabel ${PARTITION_TABLE_TYPE}" || true
-		if [ "x${LB_HDD_PARTITION_START}" = "x" ];
-		then
-			Chroot chroot "parted -a optimal -s ${FREELO} mkpart primary\
-				${PARTITION_TYPE} 0% 100%" || true
-		else
-			Echo_message "using partition start at ${LB_HDD_PARTITION_START}"
-			Chroot chroot "parted -s ${FREELO} mkpart primary ${PARTITION_TYPE}\
-				${LB_HDD_PARTITION_START} 100%" || true
-		fi
-		Chroot chroot "parted -s ${FREELO} set 1 boot on" || true
-		Chroot chroot "parted -s ${FREELO} set 1 lba off" || true
+		# create partition table
+		Chroot chroot "parted -s ${FREELO} mklabel ${LB_HDD_PARTITION_TABLE}" || true
 
-		if [ "${LB_BOOTLOADER_BIOS}" = "syslinux" ]; then
-			dd if=chroot/usr/lib/$(echo ${_BOOTLOADER} | tr '[a-z]' '[A-Z]')/mbr.bin of=${FREELO} bs=440 count=1
+		Echo_message "Created partition table: ${LB_HDD_PARTITION_TABLE}"
+
+		## EFI partition
+		if [ "$EFI_BOOT" = "true" ] &&  [ "$LB_EFI_PARTITION" = "true" ]
+		then
+			part_end=$((HDD_PARTITION_START + EFI_PARTITION_SIZE))
+
+			# create partition
+			Chroot chroot "parted -a optimal -s ${FREELO} mkpart primary\
+				fat32 ${HDD_PARTITION_START}MiB ${part_end}MiB" || true
+
+			# set flags
+			Chroot chroot "parted -s ${FREELO} set $PARTITION_NUMBER esp on" || true
+
+			Echo_message "Created EFI partition"
+
+			# update counter
+			HDD_PARTITION_START=$part_end
+			PARTITION_NUMBER=$((PARTITION_NUMBER + 1))
+		fi
+
+
+		## BIOS_grub partition
+		if [ "$BIOS_BOOT" = "true" ] && [ "$LB_HDD_PARTITION_TABLE" = "gpt" ]
+		then
+			case "$LB_BOOTLOADER_BIOS" in
+				grub-*)
+					part_end=$((HDD_PARTITION_START + BIOS_GRUB_PARTITION_SIZE))
+
+					# create partition
+					Chroot chroot "parted -a optimal -s ${FREELO} mkpart primary\
+						${HDD_PARTITION_START}MiB ${part_end}MiB" || true
+
+					# set flags
+					Chroot chroot "parted -s ${FREELO} set $PARTITION_NUMBER bios_grub on" || true
+
+					Echo_message "Created BIOS_grub partition"
+
+					# update counter
+					HDD_PARTITION_START=$part_end
+					PARTITION_NUMBER=$((PARTITION_NUMBER + 1))
+					;;
+			esac
+
+		fi
+
+
+		## LIVE partition
+		part_end=$((HDD_PARTITION_START + LIVE_PARTITION_SIZE))
+
+		# create partition
+		Chroot chroot "parted -a optimal -s ${FREELO} mkpart primary\
+			${PARTITION_TYPE} ${HDD_PARTITION_START}MiB ${part_end}MiB" || true
+
+		# set flags
+		if [ "$BIOS_BOOT" = "true" ]
+		then
+			if [ "$LB_HDD_PARTITION_TABLE" = "gpt" ]
+			then
+				Chroot chroot "parted -s ${FREELO} set $PARTITION_NUMBER legacy_boot on" || true
+			elif [ "$LB_HDD_PARTITION_TABLE" = "msdos" ]
+			then
+				Chroot chroot "parted -s ${FREELO} set $PARTITION_NUMBER boot on" || true
+			fi
+		fi
+
+		Echo_message "Created LIVE partition"
+
+		if [ "$EFI_BOOT" = "true" ] &&  [ "$LB_EFI_PARTITION" = "false" ]
+		then
+			Chroot chroot "parted -s ${FREELO} set $PARTITION_NUMBER esp on" || true
+
+			Echo_message "Set LIVE partition as EFI partition"
+
+		fi
+
+		# update counter
+		HDD_PARTITION_START=$part_end
+		PARTITION_NUMBER=$((PARTITION_NUMBER + 1))
+
+
+		## Bootloader image
+		if [ "${LB_BOOTLOADER_BIOS}" = "syslinux" ]
+		then
+			case "{$LB_HDD_PARTITION_TABLE}" in
+				gpt)
+					dd if=chroot/usr/lib/SYSLINUX/gptmbr.bin of=${FREELO} bs=440 count=1
+					;;
+				msdos)
+					dd if=chroot/usr/lib/SYSLINUX/mbr.bin of=${FREELO} bs=440 count=1
+					;;
+			esac
+
+			Echo_message "Wrote syslinux bootloader image to MBR"
+
+
+		elif [ "${LB_BOOTLOADER_BIOS}" = "extlinux" ]
+		then
+			case "{$LB_HDD_PARTITION_TABLE}" in
+				gpt)
+					dd if=chroot/usr/lib/EXTLINUX/gptmbr.bin of=${FREELO} bs=440 count=1
+					;;
+				msdos)
+					dd if=chroot/usr/lib/EXTLINUX/mbr.bin of=${FREELO} bs=440 count=1
+					;;
+			esac
+
+			Echo_message "Wrote extlinux bootloader image to MBR"
+
 		fi
 		;;
 
 	false)
-		parted -s ${FREELO} mklabel ${PARTITION_TABLE_TYPE} || true
-		if [ "x${LB_HDD_PARTITION_START}" = "x" ];
-		then
-			parted -a optimal -s ${FREELO} mkpart primary ${PARTITION_TYPE}\
-				0% 100% || true
-		else
-			Echo_message "using partition start at ${LB_HDD_PARTITION_START}"
-			parted -s ${FREELO} mkpart primary ${PARTITION_TYPE}\
-				${LB_HDD_PARTITION_START} 100% || true
-		fi
-		parted -s "${FREELO}" set 1 boot on || true
-		parted -s "${FREELO}" set 1 lba off || true
+		# create partition table
+		parted -s ${FREELO} mklabel ${LB_HDD_PARTITION_TABLE} || true
 
-		if [ "${LB_BOOTLOADER_BIOS}" = "syslinux" ]; then
-			dd if=/usr/lib/$(echo ${_BOOTLOADER} | tr '[a-z]' '[A-Z]')/mbr.bin of=${FREELO} bs=440 count=1
+		Echo_message "Created partition table: ${LB_HDD_PARTITION_TABLE}"
+
+		## EFI partition
+		if [ "$EFI_BOOT" = "true" ] &&  [ "$LB_EFI_PARTITION" = "true" ]
+		then
+			part_end=$((HDD_PARTITION_START + EFI_PARTITION_SIZE))
+
+			# create partition
+			parted -a optimal -s ${FREELO} mkpart primary\
+				fat32 ${HDD_PARTITION_START}MiB ${part_end}MiB || true
+
+			# set flags
+			parted -s ${FREELO} set $PARTITION_NUMBER esp on || true
+
+			Echo_message "Created EFI partition"
+
+			# update counter
+			HDD_PARTITION_START=$part_end
+			PARTITION_NUMBER=$((PARTITION_NUMBER + 1))
+		fi
+
+
+		## BIOS_grub partition
+		if [ "$BIOS_BOOT" = "true" ] && [ "$LB_HDD_PARTITION_TABLE" = "gpt" ]
+		then
+			case "$LB_BOOTLOADER_BIOS" in
+				grub-*)
+					part_end=$((HDD_PARTITION_START + BIOS_GRUB_PARTITION_SIZE))
+
+					# create partition
+					parted -a optimal -s ${FREELO} mkpart primary\
+						${HDD_PARTITION_START}MiB ${part_end}MiB || true
+
+					# set flags
+					parted -s ${FREELO} set $PARTITION_NUMBER bios_grub on || true
+
+					Echo_message "Created BIOS_grub partition"
+
+					# update counter
+					HDD_PARTITION_START=$part_end
+					PARTITION_NUMBER=$((PARTITION_NUMBER + 1))
+					;;
+			esac
+
+		fi
+
+
+		## LIVE partition
+		part_end=$((HDD_PARTITION_START + LIVE_PARTITION_SIZE))
+
+		# create partition
+		parted -a optimal -s ${FREELO} mkpart primary\
+			${PARTITION_TYPE} ${HDD_PARTITION_START}MiB ${part_end}MiB || true
+
+		# set flags
+		if [ "$BIOS_BOOT" = "true" ]
+		then
+			if [ "$LB_HDD_PARTITION_TABLE" = "gpt" ]
+			then
+				parted -s ${FREELO} set $PARTITION_NUMBER legacy_boot on || true
+			elif [ "$LB_HDD_PARTITION_TABLE" = "msdos" ]
+			then
+				parted -s ${FREELO} set $PARTITION_NUMBER boot on || true
+			fi
+		fi
+
+		Echo_message "Created LIVE partition"
+
+		if [ "$EFI_BOOT" = "true" ] &&  [ "$LB_EFI_PARTITION" = "false" ]
+		then
+			parted -s ${FREELO} set $PARTITION_NUMBER esp on || true
+
+			Echo_message "Set LIVE partition as EFI partition"
+		fi
+
+		# update counter
+		HDD_PARTITION_START=$part_end
+		PARTITION_NUMBER=$((PARTITION_NUMBER + 1))
+
+
+		## Bootloader image
+		if [ "${LB_BOOTLOADER_BIOS}" = "syslinux" ]
+		then
+			case "{$LB_HDD_PARTITION_TABLE}" in
+				gpt)
+					dd if=chroot/usr/lib/SYSLINUX/gptmbr.bin of=${FREELO} bs=440 count=1
+					;;
+				msdos)
+					dd if=chroot/usr/lib/SYSLINUX/mbr.bin of=${FREELO} bs=440 count=1
+					;;
+			esac
+
+			Echo_message "Wrote syslinux bootloader image to MBR"
+
+		elif [ "${LB_BOOTLOADER_BIOS}" = "extlinux" ]
+		then
+			case "{$LB_HDD_PARTITION_TABLE}" in
+				gpt)
+					dd if=chroot/usr/lib/EXTLINUX/gptmbr.bin of=${FREELO} bs=440 count=1
+					;;
+				msdos)
+					dd if=chroot/usr/lib/EXTLINUX/mbr.bin of=${FREELO} bs=440 count=1
+					;;
+			esac
+
+			Echo_message "Wrote extlinux bootloader image to MBR"
+
 		fi
 		;;
 esac
 
+# detach image file from loop device
+Echo_message "Detaching: ${FREELO}"
 Lodetach ${FREELO}
 
+# setup new image file as loop device
 FREELO="$(losetup -f)"
-Losetup $FREELO chroot/binary.img 1
+Echo_message "Setting up: ${FREELO} with multiple partitions"
+Losetup $FREELO chroot/binary.img 0
 
+if $MAKEDEV; then
+	if command -v udevadm >/dev/null
+	then
+		Echo_message "Wait for pending udev events (udevadm settle)"
+		udevadm settle
+	fi
+	Echo_message "Removing chroot/dev"
+	rm -rf chroot/dev
+	Echo_message "Creating new chroot/dev"
+	find /dev | cpio -dmpu chroot
+fi
+
+PARTITION_NUMBER=1
+
+# loop EFI partition
+if [ "$EFI_BOOT" = "true" ] &&  [ "$LB_EFI_PARTITION" = "true" ]
+then
+	EFI_PART="${FREELO}p${PARTITION_NUMBER}"
+	Echo_message "EFI partition accessible at: ${EFI_PART}"
+	PARTITION_NUMBER=$((PARTITION_NUMBER + 1))
+fi
+
+# loop Grub BIOS boot partition
+if [ "$BIOS_BOOT" = "true" ] && [ "$LB_HDD_PARTITION_TABLE" = "gpt" ]
+then
+	case "$LB_BOOTLOADER_BIOS" in
+		grub-*)
+			GRUB_PART="${FREELO}p${PARTITION_NUMBER}"
+			Echo_message "GRUB_BIOS partition accessible at: ${GRUB_PART}"
+			PARTITION_NUMBER=$((PARTITION_NUMBER + 1))
+			;;
+	esac
+
+fi
+
+
+# loop Live partition
+LIVE_PART="${FREELO}p${PARTITION_NUMBER}"
+Echo_message "LIVE partition accessible at: ${LIVE_PART}"
+PARTITION_NUMBER=$((PARTITION_NUMBER + 1))
+
+# point EFI partition to LIVE partition when not using a seperate EFI partition
+if [ "$EFI_BOOT" = "true" ] &&  [ "$LB_EFI_PARTITION" = "false" ]
+then
+	EFI_PART=$LIVE_PART
+fi
+
+
+
+# set filesystem options/parameters
 case "${LB_BINARY_FILESYSTEM}" in
 	ext2|ext3|ext4)
 		MKFS="${LB_BINARY_FILESYSTEM}"
@@ -243,16 +616,58 @@ case "${LB_BINARY_FILESYSTEM}" in
 		;;
 esac
 
+# format partitions
 case "${LB_BUILD_WITH_CHROOT}" in
 	true)
-		Chroot chroot "mkfs.${MKFS} ${MKFS_OPTIONS} ${FREELO}"
+		if [ "$EFI_BOOT" = "true" ] &&  [ "$LB_EFI_PARTITION" = "true" ]
+		then
+			Chroot chroot "mkfs.vfat -F 32 -n EFI ${EFI_PART}"
+
+			Echo_message "Formatted EFI partition with FAT32"
+
+		fi
+
+		if [ "$EFI_BOOT" = "true" ] &&  [ "$LB_EFI_PARTITION" = "false" ]
+		then
+
+			Chroot chroot "mkfs.vfat -F 32 -n EFI ${LIVE_PART}"
+			MOUNT_OPTIONS=""
+
+			Echo_message "Formatted LIVE partition with FAT32 because there is no seperate EFI partition"
+		else
+			Chroot chroot "mkfs.${MKFS} ${MKFS_OPTIONS} ${LIVE_PART}"
+
+			Echo_message "Formatted LIVE partition with ${MKFS}"
+
+		fi
+
 		;;
 
 	false)
-		mkfs.${MKFS} ${MKFS_OPTIONS} ${FREELO}
+		if [ "$EFI_BOOT" = "true" ] &&  [ "$LB_EFI_PARTITION" = "true" ]
+		then
+			mkfs.vfat -F 32 -n EFI ${EFI_PART}
+
+			Echo_message "Formatted EFI partition with FAT32"
+		fi
+
+		if [ "$EFI_BOOT" = "true" ] &&  [ "$LB_EFI_PARTITION" = "false" ]
+		then
+
+			mkfs.vfat -F 32 -n EFI ${LIVE_PART}
+			MOUNT_OPTIONS=""
+
+			Echo_message "Formatted LIVE partition with FAT32 because there is no seperate EFI partition"
+		else
+			mkfs.${MKFS} ${MKFS_OPTIONS} ${LIVE_PART}
+
+			Echo_message "Formatted LIVE partition with ${MKFS}"
+		fi
+
 		;;
 esac
 
+# set copy options/parameters
 case "${LB_BINARY_FILESYSTEM}" in
 	fat*)
 		CP_OPTIONS="-r -L"
@@ -265,9 +680,21 @@ esac
 
 Echo_message "Copying binary contents into image..."
 
+# mount LIVE partition
 mkdir -p chroot/binary.tmp
-mount ${MOUNT_OPTIONS} ${FREELO} chroot/binary.tmp
+mount ${MOUNT_OPTIONS} ${LIVE_PART} chroot/binary.tmp
+
+# mount EFI partition when applicable
+if [ "$EFI_BOOT" = "true" ]
+then
+	mkdir -p chroot/binary-efi.tmp
+	mount ${EFI_PART} chroot/binary-efi.tmp
+fi
+
+# copy binary files to image
 cp -T ${CP_OPTIONS} binary/ chroot/binary.tmp
+
+Echo_message "Done..."
 
 FIXME()
 {
@@ -300,29 +727,75 @@ EOF
 	rm -f chroot/grub.sh
 fi
 }
-
-case "${_BOOTLOADER}" in
+# set bootloader install commands
+case "${LB_BOOTLOADER_BIOS}" in
 	syslinux)
-		_SYSLINUX_INSTALLER="syslinux ${FREELO}"
+		_BOOTLOADER_INSTALLER_BIOS="syslinux ${FREELO}"
 		;;
 	extlinux)
-		_SYSLINUX_INSTALLER="extlinux --install /binary.tmp/boot/extlinux"
+		_BOOTLOADER_INSTALLER_BIOS="extlinux --install /binary.tmp/extlinux"
+		;;
+	grub-pc)
+		_BOOTLOADER_INSTALLER_BIOS="grub-install --modules=part_${LB_HDD_PARTITION_TABLE} --boot-directory=/binary.tmp/boot --target=i386-pc ${FREELO}"
 		;;
 	*)
-		_SYSLINUX_INSTALLER=""
+		_BOOTLOADER_INSTALLER_BIOS=""
 		;;
 esac
 
-if [ -n "${_SYSLINUX_INSTALLER}" ]
+# set bootloader install commands
+case "${LB_BOOTLOADER_EFI}" in
+	grub-efi)
+		_BOOTLOADER_INSTALLER_EFI="grub-install --modules=part_${LB_HDD_PARTITION_TABLE} --removable --no-nvram --no-uefi-secure-boot --efi-directory=/binary-efi.tmp --boot-directory=/binary.tmp/boot --target=x86_64-efi ${FREELO}"
+		_BOOTLOADER_INSTALLER_EFI_i386="grub-install --modules=part_${LB_HDD_PARTITION_TABLE} --removable --no-nvram --no-uefi-secure-boot --efi-directory=/binary-efi.tmp --boot-directory=/binary.tmp/boot --target=i386-efi ${FREELO}"
+		;;
+	*)
+		_BOOTLOADER_INSTALLER_EFI=""
+		_BOOTLOADER_INSTALLER_EFI_i386=""
+		;;
+
+esac
+
+
+# install EFI bootloader when applicable
+if [ -n "${_BOOTLOADER_INSTALLER_EFI}" ]
 then
+
+	Echo_message "Installing ${LB_BOOTLOADER_EFI} as EFI bootloader"
+
 	case "${LB_BUILD_WITH_CHROOT}" in
 		true)
-			Chroot chroot "${_SYSLINUX_INSTALLER}"
+			Chroot chroot ${_BOOTLOADER_INSTALLER_EFI}
+			Chroot chroot ${_BOOTLOADER_INSTALLER_EFI_i386}
 			;;
 		false)
-			${_SYSLINUX_INSTALLER}
+			${_BOOTLOADER_INSTALLER_EFI}
+			${_BOOTLOADER_INSTALLER_EFI_i386}
 			;;
 	esac
+fi
+
+# install BIOS bootloader when applicable
+if [ -n "${_BOOTLOADER_INSTALLER_BIOS}" ]
+then
+
+	Echo_message "Installing ${LB_BOOTLOADER_BIOS} as BIOS bootloader"
+
+	case "${LB_BUILD_WITH_CHROOT}" in
+		true)
+			Chroot chroot ${_BOOTLOADER_INSTALLER_BIOS}
+			;;
+		false)
+			${_BOOTLOADER_INSTALLER_BIOS}
+			;;
+	esac
+fi
+
+# unmount filesystems
+if [ "$EFI_BOOT" = "true" ]
+then
+	umount chroot/binary-efi.tmp
+	rmdir chroot/binary-efi.tmp
 fi
 
 case "${_BOOTLOADER}" in
@@ -345,9 +818,10 @@ find chroot/binary.tmp -newermt "$(date -d@${SOURCE_DATE_EPOCH} '+%Y-%m-%d %H:%M
 umount chroot/binary.tmp
 rmdir chroot/binary.tmp
 
+# detach image file from loop device
+Echo_message "Detaching: ${FREELO}"
 Lodetach ${FREELO}
-
-echo "!!! The above error/warning messages can be ignored !!!"
+Echo_message "Done!"
 
 if $MAKEDEV; then
 	rm -rf chroot/dev
@@ -356,8 +830,10 @@ fi
 
 # Set the timestamp of the image
 touch -d@${SOURCE_DATE_EPOCH} chroot/binary.img
-echo "f ${LB_IMAGE_NAME}-${LB_ARCHITECTURE}.img" >> binary.modified_timestamps
-mv chroot/binary.img ${LB_IMAGE_NAME}-${LB_ARCHITECTURE}.img
+echo "f ${LIVE_IMAGE_NAME}-${LB_ARCHITECTURE}.img" >> binary.modified_timestamps
+TODAY=$(date '+%Y-%m-%d_%H.%M.%S')
+
+mv chroot/binary.img ${LIVE_IMAGE_NAME}-${LB_ARCHITECTURES}-build_${TODAY}.img
 
 # Saving cache
 Save_package_cache binary
