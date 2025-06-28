@@ -107,6 +107,13 @@ then
 	cp chroot/var/cache/apt/archives/*.deb cache/packages.bootstrap
 fi
 
+# Copy includes.bootstrap in to chroot
+if Find_files config/includes.bootstrap/
+then
+	# Copying includes
+	Chroot_copy_dir config/includes.bootstrap/
+fi
+
 Print_breakage
 Echo_message "Running debootstrap..."
 
